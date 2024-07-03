@@ -1,0 +1,33 @@
+version: 1
+disable_existing_loggers: False
+formatters:
+  default:
+    "()": uvicorn.logging.DefaultFormatter
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  access:
+    "()": uvicorn.logging.AccessFormatter
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+handlers:
+  default:
+    formatter: default
+    class: logging.FileHandler
+    filename: /root/log/proxy.log
+    encoding: utf8
+    mode: a
+  access:
+    formatter: access
+    class: logging.FileHandler
+    filename: /root/log/proxy.log
+    encoding: utf8
+    mode: a
+loggers:
+  uvicorn.error:
+    level: ERROR
+    handlers:
+      - default
+    propagate: no
+  uvicorn.access:
+    level: INFO
+    handlers:
+      - access
+    propagate: no

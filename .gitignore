@@ -1,0 +1,4 @@
+kong/db
+*.env
+.old
+prometheus/data

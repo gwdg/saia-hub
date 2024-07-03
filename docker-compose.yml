@@ -1,0 +1,177 @@
+version: '3.9'
+
+x-kong-config:
+  &kong-env
+  KONG_DATABASE: ${KONG_DATABASE:-postgres}
+  KONG_PG_DATABASE: ${KONG_PG_DATABASE:-kong}
+  KONG_PG_HOST: db
+  KONG_PG_USER: ${KONG_PG_USER:-kong}
+  KONG_PG_PASSWORD_FILE: /run/secrets/kong_postgres_password
+
+volumes:
+  kong_data: {}
+  kong_prefix_vol:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+  kong_tmp_vol:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+
+networks:
+  kong-net:
+    external: false
+
+services:
+  kong-migrations:
+    image: "${KONG_DOCKER_TAG:-kong:latest}"
+    command: kong migrations bootstrap
+    profiles: [ "database" ]
+    depends_on:
+      - db
+    environment:
+      <<: *kong-env
+    secrets:
+      - kong_postgres_password
+    networks:
+      - kong-net
+    restart: on-failure
+
+  kong:
+    image: "${KONG_DOCKER_TAG:-kong:latest}"
+    user: "${KONG_USER:-kong}"
+    environment:
+      <<: *kong-env
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_PROXY_LISTEN: "${KONG_PROXY_LISTEN:-0.0.0.0:8000}"
+      KONG_ADMIN_LISTEN: "${KONG_ADMIN_LISTEN:-0.0.0.0:8001}"
+      KONG_ADMIN_GUI_LISTEN: "${KONG_ADMIN_GUI_LISTEN:-0.0.0.0:8002}"
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_PREFIX: ${KONG_PREFIX:-/var/run/kong}
+      KONG_DECLARATIVE_CONFIG: "/opt/kong/kong.yaml"
+    secrets:
+      - kong_postgres_password
+    networks:
+      - kong-net
+    ports:
+      # The following two environment variables default to an insecure value (0.0.0.0)
+      # according to the CIS Security test.
+      - "${KONG_INBOUND_PROXY_LISTEN:-0.0.0.0}:8000:8000/tcp"
+      - "${KONG_INBOUND_SSL_PROXY_LISTEN:-0.0.0.0}:8443:8443/tcp"
+      # Making them mandatory but undefined, like so would be backwards-breaking:
+      # - "${KONG_INBOUND_PROXY_LISTEN?Missing inbound proxy host}:8000:8000/tcp"
+      # - "${KONG_INBOUND_SSL_PROXY_LISTEN?Missing inbound proxy ssl host}:8443:8443/tcp"
+      # Alternative is deactivating check 5.13 in the security bench, if we consider Kong's own config to be enough security here
+
+      - "127.0.0.1:8001:8001/tcp"
+      - "127.0.0.1:8444:8444/tcp"
+      - "127.0.0.1:8002:8002/tcp"
+    healthcheck:
+      test: [ "CMD", "kong", "health" ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    restart: on-failure:5
+    read_only: true
+    volumes:
+      - kong_prefix_vol:${KONG_PREFIX:-/var/run/kong}
+      - kong_tmp_vol:/tmp
+      - ./kong/config:/opt/kong
+    security_opt:
+      - no-new-privileges
+
+  db:
+    image: postgres:9.5
+    profiles: [ "database" ]
+    environment:
+      POSTGRES_DB: ${KONG_PG_DATABASE:-kong}
+      POSTGRES_USER: ${KONG_PG_USER:-kong}
+      POSTGRES_PASSWORD_FILE: /run/secrets/kong_postgres_password
+    secrets:
+      - kong_postgres_password
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "pg_isready",
+          "-d",
+          "${KONG_PG_DATABASE:-kong}",
+          "-U",
+          "${KONG_PG_USER:-kong}"
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    restart: on-failure
+    stdin_open: true
+    tty: true
+    networks:
+      - kong-net
+    volumes:
+      - kong_data:/var/lib/postgresql/data
+      - ./kong/backup:/backup
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/data:/prometheus
+    networks:
+      - kong-net
+    ports:
+      - "9090:9090"
+    depends_on:
+      - kong
+    restart: always
+  
+# SSH-based proxies
+  proxy-kisski:
+    build: ./proxy-hpc
+    image: proxy-hpc:latest
+    secrets:
+      - kisski-ssh-key
+    network_mode: "host"
+    environment:
+    - PORT=${PORT}
+    - HPC_HOST=${HPC_HOST}
+    - HPC_USER=${HPC_USER}
+    - KEY_NAME=${KEY_NAME}
+    volumes:
+      - "./proxy-hpc/log:/root/log"
+    restart: on-failure
+
+# External proxies
+  proxy-azure:
+    build: ./proxy-azure
+    image: proxy-azure:latest
+    secrets:
+      - openai_key
+      - openai_deployment_name_gpt35
+      - openai_deployment_name_gpt4
+      - openai_endpoint
+    network_mode: "host"
+    environment:
+      - PORT=8731
+    volumes:
+      - "./proxy-azure/log:/root/log"
+    restart: on-failure
+
+secrets:
+  ## Database password
+  kong_postgres_password:
+    file: ./secrets/POSTGRES_PASSWORD
+  ## OpenAI/Microsoft Azure integration
+  openai_key:
+    file: ./secrets/OPENAI_KEY
+  openai_deployment_name_gpt35:
+    file: ./secrets/OPENAI_DEPLOYMENT_NAME_GPT35
+  openai_deployment_name_gpt4:
+    file: ./secrets/OPENAI_DEPLOYMENT_NAME_GPT4
+  openai_endpoint:
+    file: ./secrets/OPENAI_ENDPOINT
+  ## HPC integration
+  kisski-ssh-key:
+    file: ./secrets/kisski-ssh-key # Path to SSH key
