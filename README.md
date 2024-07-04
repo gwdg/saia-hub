@@ -1,5 +1,5 @@
 <h1 align="center">
-SAIA - the Scalable AI Accelerator
+SAIA - the Scalable AI Accelerator - Hub
 </h1>
 <p align="center">
 <a href="https://docs.hpc.gwdg.de/services/saia"><b>Documentation</b></a> | <a href="https://arxiv.org/abs/2407.00110"><b>Paper</b></a>
@@ -26,7 +26,7 @@ The API Gateway, Kong OSS, is the entrypoint of incoming requests. Since it does
 
 In a typical HPC cluster setting, the high-performance compute nodes that are capable of running Large Language Models (LLMs) may not be directly accessible from the internet. In these circumstances, the requests from the web server would have to go through an entry point to the cluster, for example a login node or service node. Furthermore, direct tunneling and port forwarding may be forbidden as a security mechanism, and only certain protocols such as SSH may be allowed.
 
-Therefore, the HPC proxy runs on the cloud server and uses an SSH key to establish a connection to the cluster's entrypoint, i.e. the login/service node. For security reasons, the SSH key hosted on the cloud server is restricted to always run a single script on the login node, namely `cloud_interface.sh` and is never actually given a shell instance. This prevents direct acces to the cluster even if the web server is compromised. The restriction to run this script is implemented by configuring the ForceCommand directive in SSH for this specific SSH key; this can be set in the `~/.ssh/authorized_keys` file of an HPC user or functional account without root access.
+Therefore, the HPC proxy runs on the cloud server and uses an SSH key to establish a connection to the cluster's entrypoint, i.e. the login/service node. For security reasons, the SSH key hosted on the cloud server is restricted to always run a single script on the login node, namely `cloud_interface.sh` and is never actually given a shell instance. This prevents direct access to the cluster even if the web server is compromised. The restriction to run this script is implemented by configuring the ForceCommand directive in SSH for this specific SSH key; this can be set in the `~/.ssh/authorized_keys` file of an HPC user or functional account without root access.
 
 <!-- For every user request on the frontend, Apache gets a unique "Inference ID" from the mediator app, which then stores it in a dictionary, and is passed on to the frontend instead of user info. When the frontend app wishes to communicate with the backend via the mediator, it must include an active "Inference ID" which it received from the initial request. Therefore, the frontend doesn't know any details of the user, but the mediator can find this information by looking up the "Inference ID" in its dictionary, which is then used for monitoring and accounting purposes. -->
 
