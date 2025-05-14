@@ -60,31 +60,36 @@ docker compose up kong -d
 You should now be able to access the Kong dashboard via `localhost:8002`, the database via `localhost:8001` and the admin API via `localhost:8000`, or whatever port number is defined in `docker-compose.yml`.
 
 ### SSH-based proxies
-Configure the SSH-based proxy settings. Create a `docker-compose.env` file and set the environment variables following this template:
+Create an SSH key on the cloud server, and add it as a ForceCommand-restricted entry to the `~/.ssh/authorized_keys` file on the HPC cluster:
+
+```bash
+command="/path/to/cloud_interface.sh",no-port-forwarding,no-X11-forwarding ssh-rsa <public_key>
+``` 
+
+Configure the secrets and environment variables in the `docker-compose.yml` file following the template in order to establish the connections to the upstream HPC services:
+
 ```
 PORT=8721
-HPC_HOST=hpc.example.com
-HPC_USER=user
+HPC_HOST=1.2.3.4
+HPC_USER=u12345
 KEY_NAME=my-ssh-key
 ```
 
-Create the SSH key on the cloud server, and add a restricted entry via ForceCommand in the `authorized_keys` file in the HPC cluster following this template:
+```
+my-ssh-key:
+    file: ./secrets/my-ssh-key # Path to SSH key
+```
 
-```bash
-command="/path/to/cloud_interface.sh" ssh-rsa <public_key>
-``` 
-
-Configure the secrets and environment variables accordingly in order to establish the connections to the upstream HPC services. 
 Then, start the proxy:
 ```bash
-docker compose --env-file docker-compose.env build proxy-kisski
-docker compose --env-file docker-compose.env up proxy-kisski
+docker compose build proxy-kisski
+docker compose up proxy-kisski
 ```
 
 It is possible to define multiple proxies in the `docker-compose.yml` file. Specific routes can be configured to each proxy in Kong.
 
 ### External proxies
-The azure proxy enables access to OpenAI models hosted through Microsoft Azur. To run this proxy, set the secrets as specified in the `docker-compose.yml` file according to the provided information. Then, start the proxy:
+The azure proxy enables access to OpenAI models hosted through Microsoft Azure. To run this proxy, create a `secrets/openai_config.json` file according to the provided information in `docker-compose.yml` and `secrets/openai_config.json.sample`. Then, start the proxy:
 ```bash
 docker compose build proxy-azure
 docker compose up proxy-azure

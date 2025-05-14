@@ -57,7 +57,7 @@ headers = {
 }
 
 data = {
-    "model": "intel-neural-chat-7b",
+    "model": "meta-llama-3.1-8b-instruct",
     "prompt": "San Fransico is a",
     "max_tokens": 7,
     "temperature": 0
@@ -86,14 +86,29 @@ We're pleased to inform you that your Chat AI API key has been created, granting
  
 API key: {key}
 API endpoint: https://chat-ai.academiccloud.de/v1
-Available models:
-- meta-llama-3-8b-instruct
-- mixtral-8x7b-instruct
-- meta-llama-3-70b-instruct
-- qwen2-72b-instruct
- 
-Note that these details may change in the future. To receive updates on SAIA's latest developments, we strongly recommend subscribing to our mailing list:
+Available models can be found at https://docs.hpc.gwdg.de/services/chat-ai/models/index.html
+API model names, API and embedding examples can be found at https://docs.hpc.gwdg.de/services/saia/index.html
+As of Feb 2025 following models are available:
+- Llama 3.1 8b Instruct
+- InternVL2.5 8B MPO
+- DeepSeek R1
+- DeepSeek R1 Distill Llama 70B
+- Llama 3.3 70B Instruct
+- LLama 3.1 SauerkrautLM Instruct
+- Llama 3.1 Nemotron 70B
+- Mistral Large Instruct
+- Codestral 22B
+- E5 Mistral 7B Instruct
+- Qwen 2.5 72B Instruct
+- Qwen 2.5 VL 72B Instruct
+- Qwen 2.5 Coder 32B Instruct
+
+Note that these details may change in the future. To receive updates on SAIA's latest developments, we strongly recommend subscribing to our mailing lists:
 https://listserv.gwdg.de/mailman/listinfo/ai-saia-users
+https://listserv.gwdg.de/mailman/listinfo/ai-chat-users
+
+You may also be interested in our monthly AI developer meeting GöAID:
+https://gwdg.de/hpc/events/goeaid/
  
 Our service is OpenAI-compatible. Therefore, similar to OpenAI, we provide the following APIs:
 - v1/completions for text generation and completion
@@ -110,7 +125,7 @@ curl -i -N -X POST \
   --header 'Authorization: Bearer <key>' \
   --header 'Content-Type: application/json'\
   --data '{                     
-  "model": "meta-llama-3-8b-instruct",
+  "model": "meta-llama-3.1-8b-instruct",
   "prompt": "San Fransico is a",
   "max_tokens": 7,
   "temperature": 0
@@ -125,7 +140,7 @@ curl -i -N -X POST \
   --header 'Authorization: Bearer <key>' \
   --header 'Content-Type: application/json'\
   --data '{                     
-  "model": "meta-llama-3-8b-instruct",
+  "model": "meta-llama-3.1-8b-instruct",
   "messages": [{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"How tall is the Eiffel tower?"}],
   "temperature": 0
 }'
@@ -139,7 +154,7 @@ from openai import OpenAI
 # API configuration
 api_key = '<api_key>' # Replace with your API key
 base_url = "https://chat-ai.academiccloud.de/v1"
-model = "meta-llama-3-8b-instruct" # Choose any available model
+model = "meta-llama-3.1-8b-instruct" # Choose any available model
   
 # Start OpenAI client
 client = OpenAI(
@@ -157,7 +172,12 @@ chat_completion = client.chat.completions.create(
 print(chat_completion) # You can extract the response text from the JSON object
 ```
  
-If you have any more questions, feel free to ask.
+Each API key is valid for 6 months. To get a new key, please visit https://saia.gwdg.de/dashboard to generate new keys or delete existing keys.
+
+If you have any more questions, feel free to send a ticket to support_at_gwdg.de with the subject "Chat AI API Issue".
+Please do not forward or reply to this mail to keep your API key private.
+
+Best regards,
 """
 elif lang == "de":
     template = u"""------
@@ -172,14 +192,29 @@ Hier sind die Zugangsdetails für den API-Dienst:
  
 API key: {key}
 API-Endpunkt: https://chat-ai.academiccloud.de/v1
-Verfügbare Modelle:
-- meta-llama-3-8b-instruct
-- mixtral-8x7b-instruct
-- meta-llama-3-70b-instruct
-- qwen2-72b-instruct
- 
+Verfügbare Modelle finden sie unterhttps://docs.hpc.gwdg.de/services/chat-ai/models/index.html
+API Modellnamen, API und Embedding Beispiele finden sie unter https://docs.hpc.gwdg.de/services/saia/index.html
+Stand Feb 2025 sind folgende Modelle verfügbar:
+- Llama 3.1 8b Instruct
+- InternVL2.5 8B MPO
+- DeepSeek R1
+- DeepSeek R1 Distill Llama 70B
+- Llama 3.3 70B Instruct
+- LLama 3.1 SauerkrautLM Instruct
+- Llama 3.1 Nemotron 70B
+- Mistral Large Instruct
+- Codestral 22B
+- E5 Mistral 7B Instruct
+- Qwen 2.5 72B Instruct
+- Qwen 2.5 VL 72B Instruct
+- Qwen 2.5 Coder 32B Instruct
+
 Bitte beachten Sie, dass sich die Modellliste in der Zukunft ändern kann. Um über die neuesten Entwicklungen von SAIA auf dem Laufenden zu bleiben, empfehlen wir Ihnen dringend, unseren Mailing-Liste zu abonnieren:
 https://listserv.gwdg.de/mailman/listinfo/ai-saia-users
+https://listserv.gwdg.de/mailman/listinfo/ai-chat-users
+
+Vielleicht interessieren Sie sich auch für unser monatliches KI Entwickler*Innen Treffen GöAID:
+https://gwdg.de/hpc/events/goeaid/ 
  
 Unser Dienst ist OpenAI-kompatibel. Daher bieten wir, ähnlich wie OpenAI, zwei Haupt-APIs an:
 - v1/completions für Textgenerierung und -vervollständigung
@@ -196,7 +231,7 @@ curl -i -N -X POST \
   --header 'Authorization: Bearer <key>' \
   --header 'Content-Type: application/json'\
   --data '{                     
-  "model": "meta-llama-3-8b-instruct",
+  "model": "meta-llama-3.1-8b-instruct",
   "prompt": "San Fransico is a",
   "max_tokens": 7,
   "temperature": 0
@@ -211,7 +246,7 @@ curl -i -N -X POST \
   --header 'Authorization: Bearer <key>' \
   --header 'Content-Type: application/json'\
   --data '{                     
-  "model": "meta-llama-3-8b-instruct",
+  "model": "meta-llama-3.1-8b-instruct",
   "messages": [{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"How tall is the Eiffel tower?"}],
   "temperature": 0
 }'
@@ -225,7 +260,7 @@ from openai import OpenAI
 # API configuration
 api_key = '<api_key>' # Replace with your API key
 base_url = "https://chat-ai.academiccloud.de/v1"
-model = "meta-llama-3-8b-instruct" # Choose any available model
+model = "meta-llama-3.1-8b-instruct" # Choose any available model
   
 # Start OpenAI client
 client = OpenAI(
@@ -243,7 +278,10 @@ chat_completion = client.chat.completions.create(
 print(chat_completion) # You can extract the response text from the JSON object
 ```
  
-Wenn Sie weitere Fragen haben, können Sie diese gerne stellen.
+Jeder API Key ist 6 Monate gültig. Um sich selbst einen neuen Key auszustellen oder bestehende Keys zu löschen besuchen sie bitte https://saia.gwdg.de/dashboard
+Wenn Sie weitere Fragen haben, können Sie diese gere als Ticket an support_at_gwdg.de mit "Chat AI API Problem" im Betreff schicken.
+Bitte leiten sie diese Mail nicht weiter oder antworten auf sie, damit ihr API Key geheim bleibt.
+Mit freundlichen Gruessen,
 """
 else:
     print("Invalid language selection")

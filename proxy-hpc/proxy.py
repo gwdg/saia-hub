@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 import os
 import sys
+import random
+import time
+import subprocess
+import threading
+import queue
 import time
 import signal
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -9,39 +14,34 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response, HTMLRes
 import asyncio
 from threading import Thread, Event
 import logging
-import paramiko
 from uuid import uuid4
 from threading import Lock
 import datetime
 import select
 import json
+import uvicorn
+import uuid
 
-############################################################################
-## This app is designed for apache with the openidc module.               ##
-## It handles UUID generation and management, maintaining SSH connections ##
-## and can also forward the frontend requests to the cluster's login node ##
 ############################################################################
 ## To run this app manually, execute the following command:               ##
-##     uvicorn proxy:app --workers 1 --host localhost --port 8010      ##
-## set user_authentication to False otherwise requests without valid UUID ##
-## will be ignored                                                        ##
+##     uvicorn proxy:app --workers 1 --host localhost --port 8010         ##
 ############################################################################
 
-
 ## Configuration
-time_limit = 24 * 3600              # time limit for an inference ID to be valid
 ROUTINE_INTERVAL = 5                # Period in seconds of sending check_routine command
-ssh_timeout = 120                   # Timeout for the SSH connection
-testing_mode = False                # If true, only test message is displayed
+INLINE_DATA_LIMIT = 1024            # Maximum data size for which proxy will not use stdin
+MAX_SSH_CONNECTIONS = 16
 ssh_key_name = os.environ.get('KEY_NAME')
 ssh_key_path = "/run/secrets/" + ssh_key_name # Path to SSH config file
-allow_custom_service_names = True   # If True, the frontend can decide the service name with the "mediator-app" header
 parse_headers = True                # If True, assumes curl writes headers and returns them exactly
+use_stdio = False                   # If True, sends all inputs through stdin. Required for large inputs e.g. files.
+enable_accounting = True            # If True, injects include_usage and counts tokens
+extract_model = True                # If True, extracts model name from JSON body
 
 ## Log configuration
-system_log = True                   # If True, log is written to syslog
-file_log   = True                   # If True, log is written to file (both can be True)
-log_path = '/root/log/proxy.log'     # If file_log = True, write log to this file
+file_log   = True                   # If True, log is written to file
+current_month = datetime.datetime.now().strftime("%Y-%m") # Get the current month and year
+log_path = f"/root/log/proxy-{current_month}.log"         # If file_log = True, write log to this file
 log_format = logging.Formatter('%(asctime)s.%(msecs)03d %(levelname)s - %(message)s', "%Y-%m-%d %H:%M:%S")
 syslog_format = logging.Formatter('mediator: %(asctime)s.%(msecs)03d %(levelname)s - %(message)s', "%Y-%m-%d %H:%M:%S")
 log_level = logging.INFO
@@ -68,19 +68,13 @@ async def startup_event():
         f_handler = logging.FileHandler(log_path)
         f_handler.setFormatter(log_format)
         handlers.append(f_handler)
-    # if system_log:
-    #     s_handler = logging.handlers.SysLogHandler(address = '/dev/log')
-    #     s_handler.setFormatter(syslog_format)
-    #     handlers.append(s_handler)
-    # ## Initialize logging
+    ## Initialize logging
     logging.basicConfig(handlers = handlers, level=log_level)
     logging.info("Starting up...")
-    initSSH()
-    #task = asyncio.create_task(keep_alive())
     keep_alive_thread = KeepAliveThread()
     keep_alive_thread.start()
     logging.info("Startup complete.")
-    
+
 
 ############################################################################
 ## Shutdown                                                               ##
@@ -89,43 +83,29 @@ async def startup_event():
 def shutdown():
     """Completely shuts down the app"""
     logging.info("Shutting down...")
-    os.kill(os.getpid(), signal.SIGTERM)
+    os.kill(os.getppid(), signal.SIGTERM)
 
 ############################################################################
 ## Interacting with the HPC cluster                                       ##
 ############################################################################
 
-async def run_keep_alive_command():
-    try:
-        stdin, stdout, stderr = ssh.exec_command("keep-alive")
-        while True:
-            rl, wl, xl = select.select([stdout.channel], [], [], 4*ROUTINE_INTERVAL)
-            if len(rl) == 0:
-                logging.error("Timeout occurred while waiting for keep-alive command to complete")
-                os._exit(1)
-            output = stdout.read().decode('utf-8')
-            if not output:
-                break
-    except Exception as e:
-        logging.error("Failed to keep-alive: ", e)
-        initSSH()
+keep_alive_event = asyncio.Event()
+keep_alive_event.set()
 
 async def keep_alive():
-    """Keep the SSH connection alive."""
-    logging.info("Starting task")
     while True:
-        await asyncio.sleep(ROUTINE_INTERVAL)
-        task = asyncio.create_task(run_keep_alive_command())
         try:
-            await asyncio.wait_for(task, timeout=4*ROUTINE_INTERVAL)
-        except asyncio.TimeoutError:
-            logging.error("Timeout occurred while waiting for keep-alive command to complete")
-            os._exit(1)
+            proc = await run_ssh_command("keep-alive")
+            await proc.wait()
+            await asyncio.sleep(ROUTINE_INTERVAL)
+        except Exception as e:
+            logging.error(f"Keep-alive failed: {str(e)}")
+            await asyncio.sleep(5)
 
 class KeepAliveThread(Thread):
     def __init__(self):
         super().__init__()
-        self._stop_event = Event()
+        self._stop_event = threading.Event()
 
     def stop(self):
         self._stop_event.set()
@@ -137,173 +117,307 @@ class KeepAliveThread(Thread):
         loop = asyncio.new_event_loop()  # New event loop for this thread
         asyncio.set_event_loop(loop)
         try:
-            while not self.stopped():
+            # while keep_alive_event.is_set():
+            while not self._stop_event.is_set():
+                logging.info("Starting keep-alive loop")
                 loop.run_until_complete(keep_alive())  # Run keep_alive in this thread's event loop
         except asyncio.TimeoutError:
-            logging.error("Timeout occurred while waiting for keep-alive command to complete")
-            os._exit(1)
+            logging.error("Timeout 3 occurred while waiting for keep-alive command to complete")
         except Exception as e:
             logging.error(f"Exception: {e}")
         finally:
             loop.close()
 
-def initSSH():
-    """Initialize the SSH connection."""
-    try:
-        global ssh
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh_config = paramiko.SSHConfig()
-        if not os.path.exists(ssh_key_path):
-            logging.error("Couldn't find SSH key")
-        # cfg = {}
-        # for k in ('hostname', 'username', 'port'):
-        #     if k in user_config:
-        #         cfg[k] = user_config[k]
-
-        cfg = {'hostname': os.environ.get('HPC_HOST'), 'username': os.environ.get('HPC_USER'), 'key_filename': ssh_key_path}
-        # if 'user' in user_config:
-        #     cfg['username'] = user_config['user']
-
-        # # if 'proxycommand' in user_config:
-        # #     cfg['sock'] = paramiko.ProxyCommand(user_config['proxycommand'])
-
-        # if 'identityfile' in user_config:
-        #     cfg['key_filename'] = user_config['identityfile']
-        logging.info("SSH Configuration: " + str(cfg))
-        ssh.connect(**cfg)
-        # command = "keep-alive"
-        # logging.info(command)
-        # stdin, stdout, stderr = ssh.exec_command(command)
-        # stdin.close()                       # stdin not needed               
-        # stdout.channel.shutdown_write()     # indicate we're not going to write to channel
-        # stdout.close()
-        logging.info("SSH connection established.")
-    except paramiko.AuthenticationException:
-        logging.error("Authentication failed, please verify your credentials.")
-    except paramiko.SSHException as sshException:
-        logging.error("Unable to establish SSH connection: %s" % sshException)
-    except Exception as e:
-        logging.error("Exception in connecting to the server: %s" % e)
-
-def parse_headers_curl(channel, stderr_channel):
+def parse_headers_curl(channel: bytes) -> tuple:
     """Reads headers, HTTP version and status code from channel response body is reached"""
-    # Parse headers
-    headers={}
+    # Initialize variables
+    headers = {}
     http_version, status_code, reason_phrase = (None, 500, "Bad response from cloud interface")
-    chunk = ''
-    headers_part = b''
+    headers_part = channel  # Treat channel as the entire response bytes
     reached_body = False
-    while not channel.closed or channel.recv_ready() or channel.recv_stderr_ready():
-        # stop if channel was closed prematurely, and there is no data in the buffers.
-        if reached_body:
-            break
-        got_chunk = False
-        readq, _, _ = select.select([channel], [], [], ssh_timeout)
-        for c in readq:
-            if c.recv_ready(): 
-                chunk = channel.recv(len(c.in_buffer))
-                headers_part += chunk
-                if '\r\n\r\n' in headers_part.decode('utf-8'): # Headers finished
-                    reached_body = True
-                    # Split headers from body and extract HTTP information
-                    status_line_and_headers, chunk = headers_part.split(b'\r\n\r\n', 1)
-                    status_line_and_headers = status_line_and_headers.decode().split('\r\n')
-                    status_line = status_line_and_headers.pop(0)
-                    http_version, status_code, reason_phrase = status_line.split(' ', 2)
-                    status_code = int(status_code)
-                    # Parse headers into a dictionary
-                    for pair in status_line_and_headers:
-                        name, value = pair.split(': ', 1)
-                        headers[name] = value
-                    break
-                got_chunk = True
-            if c.recv_stderr_ready(): 
-                # make sure to read stderr to prevent stall    
-                stderr_channel.recv_stderr(len(c.in_stderr_buffer))  
-                got_chunk = True  
-        if not got_chunk \
-            and channel.exit_status_ready() \
-            and not stderr_channel.recv_stderr_ready() \
-            and not channel.recv_ready(): 
-            channel.shutdown_read()  # indicate we're not going to read from channel
-            channel.close()  # close the channel
-            break    # exit as remote side finished and buffers are empty
+    chunk = b''
+
+    # Check if headers are present
+    if b'\r\n\r\n' in headers_part:
+        # Split headers and body
+        status_line_and_headers, chunk = headers_part.split(b'\r\n\r\n', 1)
+        status_line_and_headers = status_line_and_headers.decode().split('\r\n')
+        status_line = status_line_and_headers.pop(0)
+        
+        # Parse status line
+        try:
+            http_version, status_code, reason_phrase = status_line.split(' ', 2)
+            status_code = int(status_code)
+            if status_code == 100:  # 100 Continue
+                # Reset headers and continue reading
+                headers = {}
+                return parse_headers_curl(chunk)
+
+        except ValueError:
+            # Handle malformed status line
+            pass
+
+        # Parse headers
+        for pair in status_line_and_headers:
+            if not pair:
+                continue
+            try:
+                name, value = pair.split(': ', 1)
+                if name.lower() != 'content-length':
+                    headers[name] = value
+            except ValueError:
+                # Handle malformed header
+                pass
+
+        reached_body = True
+
+    logging.debug("Finished parse headers successfully")
     return http_version, status_code, reason_phrase, headers, chunk
+
+
+############################################################################
+## Accounting                                                             ##
+############################################################################
+
+import json
+
+def extract_tokens(response):
+    input_tokens = 0
+    output_tokens = 0
+    try:
+        response = response.decode()
+    except Exception as e:
+        logging.error("Failed to decode response")
+        return input_tokens, output_tokens
+
+    # Split the response into individual SSE events
+    events = response.split('\n\n')
+    found_usage = False
+    # Iterate over the events in reverse order to find the last valid JSON occurrence
+    for event in reversed(events):
+        try:
+            # Check if the event starts with "data: "
+            if event.startswith('data: '):
+                # Remove the "data: " prefix and parse the JSON payload
+                payload = json.loads(event[6:])  # skip the 'data: ' prefix
+            else:
+                # Parse the JSON payload directly
+                payload = json.loads(event)
+
+            if 'usage' in payload:
+                found_usage = True
+                usage = payload['usage']
+                input_tokens = usage.get('prompt_tokens', 0)
+                output_tokens = usage.get('completion_tokens', 0)
+                total_tokens = usage.get('total_tokens', 0)
+                break
+        except json.JSONDecodeError:
+            pass
+    if not found_usage:
+        logging.error("No usage data found.")
+    return input_tokens, output_tokens
+
 
 ############################################################################
 ## Passthrough                                                            ##
 ############################################################################
 
+async def run_ssh_command(remote_command, data=None):
+    # SSH command to execute
+    ssh_cmd = [
+        'ssh',
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'UserKnownHostsFile=/dev/null',
+        '-o', 'LogLevel=ERROR',
+        '-o', 'ControlMaster=auto',
+        '-o', f'ControlPath=/tmp/ssh-{random.randint(0, MAX_SSH_CONNECTIONS)}-%r@%h:%p',
+        '-o', 'ControlPersist=4h',
+        '-i', '/run/secrets/kisski-ssh-key',
+        os.environ.get("HPC_USER") + '@' + os.environ.get("HPC_HOST"),
+        remote_command
+    ]
+    
+    
+    proc = await asyncio.create_subprocess_exec(
+        *ssh_cmd,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    if data:
+        proc.stdin.write(data)
+        await proc.stdin.drain()
+        proc.stdin.close()
+
+    return proc
+
+@app.options("/passthrough/{path:path}", status_code=200)
 @app.post("/passthrough/{path:path}", status_code=200)
 @app.get("/passthrough/{path:path}", status_code=200)
 async def get_hpc_response(path: str, request: Request = None) -> Response:
     """Proxy request to HPC service node"""
+    global enable_accounting, extract_model
+    proceed_accounting = enable_accounting
     method = str(request.method)
     headers = request.headers
-    inference_id = headers.get('inference-id', "no-id")
-    userid = headers.get('X-Consumer-Custom-ID', 'anon')
-    service = headers.get('inference-service', "health")
-    logging.info ("User inference request: " + str(inference_id) + " " + str(userid) + " " + service)
     try:
         data = await request.body()
     except:
         data = None
     if request.query_params:
         path += "?" + "&".join(f"{k}={v}" for k, v in request.query_params.items())
-    ## Restart SSH connection if disconnected
-    if not ssh.get_transport() or not ssh.get_transport().is_active():
-        logging.info("SSH Connection not alive... Restarting")
-        initSSH()
 
+    ## Try to extract name of service
+    service = headers.get('inference-service', None)
+
+    ## Softly force include usage
+    if enable_accounting or extract_model:
+        try:
+            data_json = json.loads(data)
+            ## Inject include usage if streaming
+            if enable_accounting and "stream" in data_json and data_json["stream"]:
+                data_json["stream_options"] = {"include_usage": True}
+                data = json.dumps(data_json).encode()
+            if extract_model and not service:
+                if "model" in data_json:
+                    service = data_json["model"]
+        except json.JSONDecodeError as e:
+            logging.warning("Failed to parse JSON data - Accounting not available")
+            proceed_accounting = False
+            #raise HTTPException(status_code=400, detail="Invalid JSON data")
+        except Exception as e:
+            logging.warning("Failed to understand data - Accounting not available.")
+            proceed_accounting = False
+            #raise HTTPException(status_code=400, detail="Bad request")
+
+    if not service:
+        raise HTTPException(status_code=400, detail="Service or model not specified")
+    
+    user_o = None
+    user_ou = None
+
+    if 'x-consumer-groups' in headers:
+        groups = headers['x-consumer-groups'].split(',')
+        for group in groups:
+            group = group.strip()
+            if group.startswith('org_'):
+                user_o = group[4:]
+            elif group.startswith('orgunit_'):
+                user_ou = group[8:]
+
+    inference = {
+        'id': headers.get('inference-id', str(uuid.uuid4())),
+        'uid': headers.get('X-Consumer-Custom-ID', 'anon'),
+        'o': user_o,
+        'ou': user_ou,
+        'service': service,
+        'input_size': len(data) if data else 0,
+        'start_timestamp': datetime.datetime.now().isoformat(),
+        'portal': headers.get('inference-portal', 'SAIA'),
+        'status': "PENDING",
+    }
+    logging.info("Inference Request: " + json.dumps(inference))
+
+    # Extract important headers
     headers_str = ' '.join(
-        f'-H "{k}: {v}"' for k, v in headers.items() if k != 'content-length' and (k.lower() == "inference-service" or not k.lower().startswith("inference-"))  and not k.lower().startswith("x-"))
-    command = (inference_id + '\n' + userid + '\n' + service + '\n' + '/' + path + f"\n -X {method} {headers_str} -d ").encode() + data
-    stdin, stdout, stderr = ssh.exec_command(command)
-    # stdin.write(command)
-    # stdin.flush()
-    # stdin.close()                       # stdin not needed               
-    stdout.channel.shutdown_write()     # indicate we're not going to write to channel
-    ## Build or get response headers
-    headers = {}
-    chunk = ''
+        f'-H "{k}: {v}"' for k, v in headers.items() if k.lower() != 'content-length' and (k.lower() == "inference-service" or not k.lower().startswith("inference-"))  and not k.lower().startswith("x-"))
+    
+    # Build the remote command
+    command = (inference['id'] + '\n' + inference['uid'] + '\n' + inference['service'] + '\n' + '/' + path + f"\n -X {method} {headers_str}")
+    
+    # Determine if data should be sent inline
+    is_parsable = False
     try:
-        http_version, status_code, reason_phrase = (None, 200, "OK")
-        if parse_headers:
-            http_version, status_code, reason_phrase, headers, chunk = parse_headers_curl(stdout.channel, stderr.channel)
+        decoded_data = data.decode('utf-8')
+    except:
+        is_parsable = False
+    
+    data_remains = False
+    if data and is_parsable and len(data) <= INLINE_DATA_LIMIT and not use_stdio:
+        remote_command = (command + ' -d ').encode() + data
+    else:
+        remote_command = command.encode()
+        data_remains = True
+    
+    # Start the async subprocess
+    proc = await run_ssh_command(remote_command, data)
+
+    # Read headers first
+    header_buffer = b''
+    try:
+        while True:
+            chunk = await proc.stdout.read(4096)
+            if not chunk:
+                break
+            header_buffer += chunk
+            if b'\r\n\r\n' in header_buffer:
+                break
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(504, "Timeout waiting for headers")
+
+    # Parse headers from the buffer
+    try:
+        http_version, status_code, reason_phrase, headers, body_chunk = parse_headers_curl(header_buffer)
     except Exception as e:
-        logging.error(str(e))
-        raise HTTPException(500, "Failed to parse response from cloud interface")
-    #if status_code != 200:
-    #    raise HTTPException(status_code, reason_phrase)
-    # Get response body
-    def stream(first_chunk):
-        yield first_chunk
-        # chunked read to prevent stalls
-        while not stdout.channel.closed or stdout.channel.recv_ready() or stdout.channel.recv_stderr_ready(): 
-            # stop if channel was closed prematurely, and there is no data in the buffers.
-            got_chunk = False
-            readq, _, _ = select.select([stdout.channel], [], [], ssh_timeout)
-            for c in readq:
-                if c.recv_ready(): 
-                    chunk = stdout.channel.recv(len(c.in_buffer))
-                    yield chunk
-                    got_chunk = True
-                if c.recv_stderr_ready(): 
-                    # make sure to read stderr to prevent stall    
-                    stderr.channel.recv_stderr(len(c.in_stderr_buffer))  
-                    got_chunk = True  
-            if not got_chunk \
-                and stdout.channel.exit_status_ready() \
-                and not stderr.channel.recv_stderr_ready() \
-                and not stdout.channel.recv_ready(): 
-                stdout.channel.shutdown_read()  # indicate we're not going to read from channel
-                stdout.channel.close()  # close the channel
-                break    # exit as remote side finished and buffers are empty
-        # close all the pseudofiles
-        stdout.close()
-        stderr.close()
-    logging.debug(str(headers))
-    return StreamingResponse(stream(chunk), headers=headers, status_code=status_code)
+        proc.kill()
+        raise HTTPException(502, f"Bad gateway: {str(e)}")
+    
+    async def stream_generator():
+        try:
+            # Yield the initial body chunk from header parsing
+            full_response = b''
+            if body_chunk:
+                yield body_chunk
+                full_response += body_chunk
+            
+            # Stream remaining data
+            while True:
+                chunk = await proc.stdout.read(4096)
+                if not chunk:
+                    break
+                yield chunk
+                full_response += chunk
+            # Collect stderr for logging
+            # stderr = await proc.stderr.read()
+            # if stderr:
+            #    logging.debug(f"SSH stderr: {stderr.decode()}")
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+        inference['end_timestamp'] = datetime.datetime.now().isoformat()
+        inference['status'] = 'COMPLETED'
+        inference['output_size'] = len(full_response)
+        try:
+            input_tokens, output_tokens = extract_tokens(full_response) if proceed_accounting else (0,0)
+            inference['input_tokens'] = input_tokens
+            inference['output_tokens'] = output_tokens
+        except Exception as e:
+            logging.warning("Failed to extract tokens.")
+        logging.info("Inference Response: " + json.dumps(inference))
+        await proc.wait()
+    
+    return StreamingResponse(
+        stream_generator(),
+        headers=headers,
+        status_code=status_code
+    )
 
-
+if __name__ == '__main__':
+    uvicorn.run(
+        "proxy:app",
+        workers=int(os.environ.get("WORKERS", 1)),
+        loop="uvloop",
+        timeout_keep_alive=120,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),  # Default port to 8000 if $PORT is not set
+        log_config="./log_conf.yaml",
+        log_level="info",  # Adjust as needed
+        reload=False,      # Optional, for development
+    )

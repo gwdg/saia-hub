@@ -59,8 +59,10 @@ services:
     ports:
       # The following two environment variables default to an insecure value (0.0.0.0)
       # according to the CIS Security test.
-      - "${KONG_INBOUND_PROXY_LISTEN:-0.0.0.0}:8000:8000/tcp"
-      - "${KONG_INBOUND_SSL_PROXY_LISTEN:-0.0.0.0}:8443:8443/tcp"
+      - "${KONG_INBOUND_PROXY_LISTEN:-172.17.0.1}:8000:8000/tcp"
+      - "${KONG_INBOUND_PROXY_LISTEN:-127.0.0.1}:8000:8000/tcp"
+      - "${KONG_INBOUND_SSL_PROXY_LISTEN:-172.17.0.1}:8443:8443/tcp"
+      - "${KONG_INBOUND_SSL_PROXY_LISTEN:-127.0.0.1}:8443:8443/tcp"
       # Making them mandatory but undefined, like so would be backwards-breaking:
       # - "${KONG_INBOUND_PROXY_LISTEN?Missing inbound proxy host}:8000:8000/tcp"
       # - "${KONG_INBOUND_SSL_PROXY_LISTEN?Missing inbound proxy ssl host}:8443:8443/tcp"
@@ -135,28 +137,26 @@ services:
       - kisski-ssh-key
     network_mode: "host"
     environment:
-    - PORT=${PORT}
-    - HPC_HOST=${HPC_HOST}
-    - HPC_USER=${HPC_USER}
-    - KEY_NAME=${KEY_NAME}
+    - PORT=8721
+    - HPC_HOST=1.2.3.4 # Replace with hostname of HPC login node
+    - HPC_USER=u12345 # Replace with username of functional account
+    - KEY_NAME=my-ssh-key
+    - WORKERS=8
     volumes:
-      - "./proxy-hpc/log:/root/log"
-    restart: on-failure
+      - "./proxy-hpc:/root"
+    restart: always
 
 # External proxies
   proxy-azure:
     build: ./proxy-azure
     image: proxy-azure:latest
     secrets:
-      - openai_key
-      - openai_deployment_name_gpt35
-      - openai_deployment_name_gpt4
-      - openai_endpoint
+      - openai_config
     network_mode: "host"
     environment:
       - PORT=8731
     volumes:
-      - "./proxy-azure/log:/root/log"
+      - "./proxy-azure:/root"
     restart: on-failure
 
 secrets:
@@ -164,14 +164,8 @@ secrets:
   kong_postgres_password:
     file: ./secrets/POSTGRES_PASSWORD
   ## OpenAI/Microsoft Azure integration
-  openai_key:
-    file: ./secrets/OPENAI_KEY
-  openai_deployment_name_gpt35:
-    file: ./secrets/OPENAI_DEPLOYMENT_NAME_GPT35
-  openai_deployment_name_gpt4:
-    file: ./secrets/OPENAI_DEPLOYMENT_NAME_GPT4
-  openai_endpoint:
-    file: ./secrets/OPENAI_ENDPOINT
+  openai_config:
+    file: ./secrets/openai_config.json
   ## HPC integration
-  kisski-ssh-key:
-    file: ./secrets/kisski-ssh-key # Path to SSH key
+  my-ssh-key:
+    file: ./secrets/my-ssh-key # Path to SSH key
