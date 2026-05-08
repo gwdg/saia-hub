@@ -2,7 +2,7 @@
 SAIA - the Scalable AI Accelerator - Hub
 </h1>
 <p align="center">
-<a href="https://docs.hpc.gwdg.de/services/saia"><b>Documentation</b></a> | <a href="https://www.researchsquare.com/article/rs-6648693/v1"><b>Paper</b></a>
+<a href="https://docs.hpc.gwdg.de/services/saia"><b>Documentation</b></a> | <a href="https://link.springer.com/article/10.1007/s11227-026-08508-3"><b>Paper</b></a>
 </p>
 
 This repository contains the server components of the Scalable AI Accelerator SAIA, which hosts AI services such as <a href="https://chat-ai.academiccloud.de">Chat AI</a>. The implementation of the remaining components of the complete architecture for Chat AI can be found in two other repos:
@@ -108,17 +108,17 @@ We thank all colleagues and partners involved in this project.
 If you use SAIA or Chat AI in your research or services, please cite us as follows:
 
 ```
-@misc{doosthosseiniSAIASeamlessSlurmNative2025,
-  title = {{{SAIA}}: {{A Seamless Slurm-Native Solution}} for {{HPC-Based Services}}},
-  shorttitle = {{{SAIA}}},
-  author = {Doosthosseini, Ali and Decker, Jonathan and Nolte, Hendrik and Kunkel, Julian},
-  year = {2025},
-  month = jul,
-  publisher = {Research Square},
-  issn = {2693-5015},
-  doi = {10.21203/rs.3.rs-6648693/v1},
-  url = {https://www.researchsquare.com/article/rs-6648693/v1},
-  urldate = {2025-07-29},
-  archiveprefix = {Research Square}
+@article{doosthosseini_saia_2026,
+	title = {{SAIA}: a seamless {Slurm}-native solution for {HPC}-based services},
+	volume = {82},
+	issn = {1573-0484},
+	url = {https://doi.org/10.1007/s11227-026-08508-3},
+	doi = {10.1007/s11227-026-08508-3},
+	number = {7},
+	journal = {The Journal of Supercomputing},
+	author = {Doosthosseini, Ali and Decker, Jonathan and Nolte, Hendrik and Kunkel, Julian},
+	month = may,
+	year = {2026},
+	pages = {403},
 }
 ```
